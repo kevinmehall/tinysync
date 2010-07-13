@@ -4,6 +4,7 @@ import hashlib
 import os
 import fnmatch
 from urlparse import urlparse
+from optparse import OptionParser
 import paramiko
 paramiko.util.log_to_file('/tmp/paramiko.log')
 
@@ -141,8 +142,12 @@ class TinyUpload:
 		return False
 
 	def walkfn(self, n, dirname, names):
+		print 'o', dirname
+		dirname = dirname[len(self.path)+1:]
+		print 'dirname', dirname
+		
 		for name in names:
-			path = os.path.join(dirname, name)[2:]
+			path = os.path.join(dirname, name)
 			
 			if self.is_excluded(path):
 				#print "excluding", path
@@ -152,7 +157,7 @@ class TinyUpload:
 				self.local[path] = 'dir'
 			else:
 				h = hashlib.new('sha1')
-				f = open(path, 'rb')
+				f = open(os.path.join(self.path, path), 'rb')
 				while True:
 					x = f.read(1024*1024)
 					if not x: break
@@ -165,21 +170,29 @@ class TinyUpload:
 		os.path.walk(self.path, self.walkfn, None)
 		return self.local
 		
-	def sync(self, backend):
+	def sync(self, backend, dryrun = False, force_full=False):
 		local = self.walk_local()
 		backend.connect()
-		remote = self.parse_digest(backend.get_digest())
+		
+		if force_full:
+			remote = {}
+		else:
+			remote = self.parse_digest(backend.get_digest())
 		
 		added = updated = deleted = total = 0
 		
 		for i in remote:
 			if i not in local:
 				print "Deleting %s"%(i)
+				deleted += 1
+				
+				if dryrun: continue
+				
 				if remote[i] == 'dir':
 					backend.delete_dir(i)
 				else:
 					backend.delete_file(i)
-				deleted += 1
+				
 		
 		for i in sorted(local):
 			total += 1
@@ -191,6 +204,8 @@ class TinyUpload:
 				updated += 1
 			else:
 				continue
+				
+			if dryrun: continue
 			
 			if local[i] == 'dir':
 				if i in remote:
@@ -201,42 +216,34 @@ class TinyUpload:
 					backend.delete_dir(i)
 				backend.put_file(os.path.join(self.path, i), i)
 				
-		if added+updated+deleted:
+		if added+updated+deleted and not (dryrun is True):
 			backend.put_digest(self.make_digest(local))
 		backend.done()
 		
+		if dryrun == 'digest-only':
+			print "UPDATING DIGEST: ",
+		elif dryrun:
+			print "DRY RUN: ",
 		print "Synchronized %i files. (%i added; %i updated; %i deleted)" %(total, added, updated, deleted)
 		
-	def run(self, args):
-		if '--help' in args:
-			print "Help!"
-			return
-			
-		if len(args) > 0 and args[0] == '--location':
-			f = open(os.path.join(self.path, CONFIG_NAME), 'at')
-			f.write('\n%s = %s'%(args[1], args[2]))
-			location = args[1]
-			print "Added location %s"%location
-			f.close()
-		elif len(args) > 0 and args[0] == '--exclude':
-			f = open(os.path.join(self.path, CONFIG_NAME), 'at')
-			f.write('\nexclude %s'%(args[1]))
-			print "Added exclude rule"
-			f.close()
-			return
-		elif len(args) > 0:
-			location = args[0]
-		else:
-			location = 'default'
+	def add_exclude_rule(self, rule):
+		f = open(os.path.join(self.path, CONFIG_NAME), 'at')
+		f.write('\nexclude %s'%(rule))
+		f.close()
 		
-		uri = None
+	def add_location(self, name, uri):
+		f = open(os.path.join(self.path, CONFIG_NAME), 'at')
+		f.write('\n%s = %s'%(name, uri))
+		f.close()
 		
+	def read_config(self, location=None):
 		try:
 			cfg = open(os.path.join(self.path, CONFIG_NAME), 'rt')
 		except IOError:
 			print "Config file %s not found"%CONFIG_NAME
 			return
 		
+		uri = None
 		for line in cfg:
 			if not line.strip(): continue
 			if line.startswith('exclude '):
@@ -247,11 +254,45 @@ class TinyUpload:
 				v=v.strip()
 				if k == location:
 					uri = v
+		return uri
+		
+	def run(self, args):
+		parser = OptionParser()
+		parser.add_option('-l', '--location', type='string', dest='location')
+		parser.add_option('--exclude', type='string', dest='exclude')
+		parser.add_option('-d', '--dir', type='string', dest='dir')
+		parser.add_option('-f', '--full', action='store_true', dest='force_full')
+		parser.add_option('-n', '--dry-run', action='store_true', dest='dry_run')
+		parser.add_option('--mark-updated', action='store_const', dest='dry_run', const='digest-only')
+		(options, args) = parser.parse_args(args)
+		
+		if options.dir:
+			self.path = options.dir
+		
+		if options.exclude:
+			print "Added exclude rule"
+			self.add_exclude_rule(options.exclude)
+			return
+			
+		if len(args):
+			location = args[0]
+		else:
+			location = 'default'
+		
+		if options.location:
+			self.add_location(location, options.location)
+			print "Added location %s"%location
+		
+		uri = self.read_config(location)
+					
+		if not uri:
+			print "Unknown location '%s'. Add with `tinyupload %s --location <uri>`"%(location, location)
+			return
 		
 		backend = backend_from_uri(uri)
-		self.sync(backend)
+		self.sync(backend, options.dry_run, options.force_full)
 		
 		
-if __name__ == '__main__':
+if __name__ == '__main__':	
 	t = TinyUpload()
 	t.run(sys.argv[1:])
