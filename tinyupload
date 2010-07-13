@@ -135,39 +135,41 @@ class TinyUpload:
 		self.exclude = ['.tinyupload_config', '.bzr', '.git']
 		
 	def is_excluded(self, path):
-		for p in path.split(os.path.sep):
-			for rule in self.exclude:
-				if fnmatch.fnmatch(p, rule):
-					return True
+		for rule in self.exclude:
+			if fnmatch.fnmatch(path, rule):
+				return True
 		return False
 
-	def walkfn(self, n, dirname, names):
-		print 'o', dirname
-		dirname = dirname[len(self.path)+1:]
-		print 'dirname', dirname
+	def walk_file(self, path):
+		#print 'walking', path
+		if self.is_excluded(path):
+			return False
 		
-		for name in names:
-			path = os.path.join(dirname, name)
+		if os.path.isdir(path):
+			sha1 = 'dir'
+		else:
+			h = hashlib.new('sha1')
+			f = open(os.path.join(self.path, path), 'rb')
+			while True:
+				x = f.read(1024*1024)
+				if not x: break
+				h.update(x)
+			sha1 = h.hexdigest()
 			
-			if self.is_excluded(path):
-				#print "excluding", path
-				continue
-				
-			if os.path.isdir(path):
-				self.local[path] = 'dir'
-			else:
-				h = hashlib.new('sha1')
-				f = open(os.path.join(self.path, path), 'rb')
-				while True:
-					x = f.read(1024*1024)
-					if not x: break
-					h.update(x)
-				sha1 = h.hexdigest()
-				self.local[path] = sha1
+		self.local[path] = sha1
+		return sha1
+		
 				
 	def walk_local(self):
 		self.local = {}
-		os.path.walk(self.path, self.walkfn, None)
+		for dirpath, dirnames, filenames in os.walk(self.path):
+			dirname = dirpath[len(self.path)+1:]
+			for i in filenames:
+				self.walk_file(os.path.join(dirname, i))
+			for i in dirnames[:]:
+				if not self.walk_file(os.path.join(dirname, i)):
+					dirnames.remove(i)
+				
 		return self.local
 		
 	def sync(self, backend, dryrun = False, force_full=False):
