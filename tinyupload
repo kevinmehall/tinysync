@@ -1,0 +1,257 @@
+#!/usr/bin/env python
+import sys
+import hashlib
+import os
+import fnmatch
+from urlparse import urlparse
+import paramiko
+paramiko.util.log_to_file('/tmp/paramiko.log')
+
+DIGEST_NAME = '.tinyupload_digest'
+CONFIG_NAME = '.tinyupload_config'
+
+class Backend:
+	pass	
+
+class LocalBackend(Backend):
+	def __init__(self, path):
+		self.path = path
+
+	def connect(self):
+		if not os.path.exists(self.path):
+			print "Creating remote base directory"
+			os.mkdir(self.path)
+			
+	def done(self):
+		pass
+		
+	def get_digest(self):
+		try:
+			return open(os.path.join(self.path, DIGEST_NAME), 'rt').read()
+		except IOError:
+			return ''
+			
+	def put_digest(self, digest):
+		open(os.path.join(self.path, DIGEST_NAME), 'wt').write(digest)
+			
+	def put_file(self, localfile, path):
+		f = open(os.path.join(self.path, path), 'wb')
+		f.write(open(localfile, 'rb').read())
+		f.close()
+		
+	def mkdir(self, path):
+		os.mkdir(os.path.join(self.path, path))
+		
+	def delete_dir(self, path):
+		os.rmdir(os.path.join(self.path, path))
+		
+	def delete_file(self, path):
+		os.unlink(os.path.join(self.path, path))
+
+class SFTPBackend(Backend):
+	def __init__(self, uri):
+		self.uri = uri
+		
+	def connect(self):
+		self.transport = paramiko.Transport(self.uri.hostname)
+		agent = paramiko.Agent()
+		keys = agent.get_keys()
+		if len(keys) != 0:
+   			self.transport.connect()
+			for key in keys:
+				try:
+					self.transport.auth_publickey(self.uri.username, key)
+				except:
+					pass
+				if self.transport.is_authenticated():
+					break
+		if not self.transport.is_authenticated():
+			self.transport.auth_password(self.uri.username, self.uri.password)
+		self.sftp = paramiko.SFTPClient.from_transport(self.transport)
+		try:
+			self.sftp.mkdir(self.uri.path)
+			print "Creating remote base directory"
+		except:
+			pass
+		self.sftp.chdir(self.uri.path)
+		
+	def done(self):
+		self.sftp.close()
+		self.transport.close()
+		
+	def get_digest(self):
+		try:
+			return self.sftp.open(DIGEST_NAME).read()
+		except:
+			return ''
+			
+	def put_digest(self, digest):
+		f = self.sftp.open(DIGEST_NAME, 'w')
+		f.write(digest)
+		f.close()
+			
+	def put_file(self, localfile, path):
+		self.sftp.put(localfile, path)
+		
+	def mkdir(self, path):
+		self.sftp.mkdir(path)
+		
+	def delete_dir(self, path):
+		self.sftp.rmdir(path)
+		
+	def delete_file(self, path):
+		self.sftp.unlink(path)
+
+def backend_from_uri(uri):
+	uri  = urlparse(uri)
+	if uri.scheme == 'file':
+		return LocalBackend(uri.path)
+	elif uri.scheme == 'sftp':
+		return SFTPBackend(uri)
+	else:
+		raise TypeError("Unknown URI scheme")
+
+class TinyUpload:
+	@classmethod		
+	def make_digest(self, m):
+		l=[]
+		for path in m:
+			l.append("%s  %s"%(m[path], path))
+		return '\n'.join(l)
+	
+	@classmethod		
+	def parse_digest(self, c):
+		r = {}
+		for line in c.split('\n'):
+			if not line: continue
+			sha1, path =  line.split('  ')
+			r[path] = sha1
+		return r
+	
+	
+	def __init__(self, path='.'):
+		self.path = path
+		self.exclude = ['.tinyupload_config', '.bzr', '.git']
+		
+	def is_excluded(self, path):
+		for p in path.split(os.path.sep):
+			for rule in self.exclude:
+				if fnmatch.fnmatch(p, rule):
+					return True
+		return False
+
+	def walkfn(self, n, dirname, names):
+		for name in names:
+			path = os.path.join(dirname, name)[2:]
+			
+			if self.is_excluded(path):
+				#print "excluding", path
+				continue
+				
+			if os.path.isdir(path):
+				self.local[path] = 'dir'
+			else:
+				h = hashlib.new('sha1')
+				f = open(path, 'rb')
+				while True:
+					x = f.read(1024*1024)
+					if not x: break
+					h.update(x)
+				sha1 = h.hexdigest()
+				self.local[path] = sha1
+				
+	def walk_local(self):
+		self.local = {}
+		os.path.walk(self.path, self.walkfn, None)
+		return self.local
+		
+	def sync(self, backend):
+		local = self.walk_local()
+		backend.connect()
+		remote = self.parse_digest(backend.get_digest())
+		
+		added = updated = deleted = total = 0
+		
+		for i in remote:
+			if i not in local:
+				print "Deleting %s"%(i)
+				if remote[i] == 'dir':
+					backend.delete_dir(i)
+				else:
+					backend.delete_file(i)
+				deleted += 1
+		
+		for i in sorted(local):
+			total += 1
+			if i not in remote:
+				print "Adding   %s"%(i)
+				added += 1
+			elif local[i] != remote[i]:
+				print "Updating %s"%(i)
+				updated += 1
+			else:
+				continue
+			
+			if local[i] == 'dir':
+				if i in remote:
+					backend.delete_file(i)
+				backend.mkdir(i)
+			else:
+				if i in remote and remote[i] == 'dir':
+					backend.delete_dir(i)
+				backend.put_file(os.path.join(self.path, i), i)
+				
+		if added+updated+deleted:
+			backend.put_digest(self.make_digest(local))
+		backend.done()
+		
+		print "Synchronized %i files. (%i added; %i updated; %i deleted)" %(total, added, updated, deleted)
+		
+	def run(self, args):
+		if '--help' in args:
+			print "Help!"
+			return
+			
+		if len(args) > 0 and args[0] == '--location':
+			f = open(os.path.join(self.path, CONFIG_NAME), 'at')
+			f.write('\n%s = %s'%(args[1], args[2]))
+			location = args[1]
+			print "Added location %s"%location
+			f.close()
+		elif len(args) > 0 and args[0] == '--exclude':
+			f = open(os.path.join(self.path, CONFIG_NAME), 'at')
+			f.write('\nexclude %s'%(args[1]))
+			print "Added exclude rule"
+			f.close()
+			return
+		elif len(args) > 0:
+			location = args[0]
+		else:
+			location = 'default'
+		
+		uri = None
+		
+		try:
+			cfg = open(os.path.join(self.path, CONFIG_NAME), 'rt')
+		except IOError:
+			print "Config file %s not found"%CONFIG_NAME
+			return
+		
+		for line in cfg:
+			if not line.strip(): continue
+			if line.startswith('exclude '):
+				self.exclude.append(line[len('exclude '):].strip())
+			else:
+				k, v = line.split('=')
+				k=k.strip()
+				v=v.strip()
+				if k == location:
+					uri = v
+		
+		backend = backend_from_uri(uri)
+		self.sync(backend)
+		
+		
+if __name__ == '__main__':
+	t = TinyUpload()
+	t.run(sys.argv[1:])
