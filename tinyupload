@@ -259,13 +259,19 @@ class TinyUpload:
 		return uri
 		
 	def run(self, args):
-		parser = OptionParser()
-		parser.add_option('-l', '--location', type='string', dest='location')
-		parser.add_option('--exclude', type='string', dest='exclude')
-		parser.add_option('-d', '--dir', type='string', dest='dir')
-		parser.add_option('-f', '--full', action='store_true', dest='force_full')
-		parser.add_option('-n', '--dry-run', action='store_true', dest='dry_run')
-		parser.add_option('--mark-updated', action='store_const', dest='dry_run', const='digest-only')
+		parser = OptionParser(usage='%prog [location] [options]')
+		parser.add_option('-l', '--uri', type='string', dest='location',
+			metavar='URI', help='Set the URI for the chosen location')
+		parser.add_option('--exclude', type='string', dest='exclude',
+			metavar='RULE', help='Add an exclude rule (glob syntax)')
+		parser.add_option('-d', '--dir', type='string', dest='dir',
+			help="Work in DIR instead of the current directory")
+		parser.add_option('-f', '--full', action='store_true', dest='force_full',
+			help="Ignore the remote digest and force full upload")
+		parser.add_option('-n', '--dry-run', action='store_true', dest='dry_run',
+			help="Perform a trial run and make no changes")
+		parser.add_option('--mark-updated', action='store_const', dest='dry_run', const='digest-only',
+			help="Update the remote digest without syncing files. Use only if remote dir is known to be in sync")
 		(options, args) = parser.parse_args(args)
 		
 		if options.dir:
