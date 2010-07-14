@@ -132,7 +132,7 @@ class TinyUpload:
 	
 	def __init__(self, path='.'):
 		self.path = path
-		self.exclude = ['.tinyupload_config', '.bzr', '.git']
+		self.exclude = ['.tinyupload_config', '.bzr', '.git', '*~']
 		
 	def is_excluded(self, path):
 		for rule in self.exclude:
@@ -275,7 +275,7 @@ class TinyUpload:
 		(options, args) = parser.parse_args(args)
 		
 		if options.dir:
-			self.path = options.dir
+			self.path = options.dir.rstrip('/')
 		
 		if options.exclude:
 			print "Added exclude rule"
