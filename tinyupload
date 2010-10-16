@@ -145,11 +145,12 @@ class TinyUpload:
 		if self.is_excluded(path):
 			return False
 		
-		if os.path.isdir(path):
+		fullpath = os.path.join(self.path, path)
+		if os.path.isdir(fullpath):
 			sha1 = 'dir'
 		else:
 			h = hashlib.new('sha1')
-			f = open(os.path.join(self.path, path), 'rb')
+			f = open(fullpath, 'rb')
 			while True:
 				x = f.read(1024*1024)
 				if not x: break
@@ -162,7 +163,7 @@ class TinyUpload:
 				
 	def walk_local(self):
 		self.local = {}
-		for dirpath, dirnames, filenames in os.walk(self.path):
+		for dirpath, dirnames, filenames in os.walk(self.path, followlinks=True):
 			dirname = dirpath[len(self.path)+1:]
 			for i in filenames:
 				self.walk_file(os.path.join(dirname, i))
