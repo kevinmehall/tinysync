@@ -6,10 +6,9 @@ import fnmatch
 from urlparse import urlparse
 from optparse import OptionParser
 import paramiko
-paramiko.util.log_to_file('/tmp/paramiko.log')
 
-DIGEST_NAME = '.tinyupload_digest'
-CONFIG_NAME = '.tinyupload_config'
+DIGEST_NAME = '.tinysync_digest'
+CONFIG_NAME = '.tinysync_config'
 
 class Backend:
 	pass	
@@ -112,7 +111,7 @@ def backend_from_uri(uri):
 	else:
 		raise TypeError("Unknown URI scheme")
 
-class TinyUpload:
+class TinySync:
 	@classmethod		
 	def make_digest(self, m):
 		l=[]
@@ -132,7 +131,7 @@ class TinyUpload:
 	
 	def __init__(self, path='.'):
 		self.path = path
-		self.exclude = ['.tinyupload_config', '.bzr', '.git', '*~']
+		self.exclude = [CONFIG_NAME, '.bzr', '.git', '*~']
 		
 	def is_excluded(self, path):
 		for rule in self.exclude:
@@ -295,7 +294,7 @@ class TinyUpload:
 		uri = self.read_config(location)
 					
 		if not uri:
-			print "Unknown location '%s'. Add with `tinyupload %s --location <uri>`"%(location, location)
+			print "Unknown location '%s'. Add with `tinysync %s -l <uri>`"%(location, location)
 			return
 		
 		backend = backend_from_uri(uri)
@@ -303,5 +302,5 @@ class TinyUpload:
 		
 		
 if __name__ == '__main__':	
-	t = TinyUpload()
+	t = TinySync()
 	t.run(sys.argv[1:])
